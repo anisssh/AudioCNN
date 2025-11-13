@@ -7,7 +7,8 @@ import torchaudio
 import torch.nn as nn
 import torchaudio.transforms as T
 import torch.optim as optim
-
+import torch.optim.lr_scheduler as OneCycleLR
+from tqdm import tqdm
 from model import AudioCNN
 
 app = modal.App("audio-cnn")
@@ -112,7 +113,19 @@ def train():
     num_epochs = 100
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=0.0005, weight_decay=0.01)
-    
+
+    scheduler = OneCycleLR(optimizer, max_lr=0.002,
+                           epochs=num_epochs, steps_per_epoch=len(train_dataloader), pct_start=0.1)
+
+    best_accuracy = 0.0
+    print("starting training")
+    for epoch in range(num_epochs):
+        model.train()
+        epoch_loss = 0.0
+        progess_bar = tqdm(
+            train_dataloader, desc=f'Epoch {epoch+1}/{num_epochs}')
+        for data, target in progess_bar:
+            data, target = data.to(device), target.to(device)
 
 
 @app.local_entrypoint()
