@@ -8,7 +8,7 @@ import torchaudio
 import torch.nn as nn
 import torchaudio.transforms as T
 import torch.optim as optim
-import torch.optim.lr_scheduler as OneCycleLR
+from torch.optim.lr_scheduler import OneCycleLR
 from tqdm import tqdm
 from model import AudioCNN
 from torch.utils.tensorboard import SummaryWriter
@@ -74,16 +74,32 @@ class ESC50Dataset(Dataset):
 
 def mixup_data(x, y):
     lam = np.random.beta(0.2, 0.2)
+
     batch_size = x.size(0)
     index = torch.randperm(batch_size).to(x.device)
 
-    mixed_x = lam * x + (1-lam) * x[index:]
+    mixed_x = lam * x + (1 - lam) * x[index, :]
     y_a, y_b = y, y[index]
-    return y_a, y_b, mixed_x, lam
+    return mixed_x, y_a, y_b, lam
 
 
-def mixup_criterion(y_a, y_b, pred, lam, criterion):
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+
+
+@app.function(image=image, volumes={"/models": model_volume})
+def check_accuracy_remote():
+    import torch
+    checkpoint = torch.load("/models/best_model.pth", map_location="cpu")
+    print("Best Validation Accuracy:", checkpoint["accuracy"])
+    print("Epoch:", checkpoint["epoch"])
+
+@app.function(image=image,volumes={"/models": model_volume})
+def debug_volume():
+    import os
+    print("Inside Modal container, listing /models:")
+    print(os.listdir("/models"))
+
 
 
 @app.function(image=image, gpu="A10G", volumes={"/data": volume, "/models": model_volume}, timeout=60*60*3)
@@ -118,7 +134,7 @@ def train():
     train_dataset = ESC50Dataset(
         data_dir=esc50_dir, metadata_file=esc50_dir / "meta" / "esc50.csv", split="train", transform=train_transform)
     val_dataset = ESC50Dataset(
-        data_dir=esc50_dir, metadata_file=esc50_dir / "meta" / "esc50.csv", split="val", transform=val_transform)
+        data_dir=esc50_dir, metadata_file=esc50_dir / "meta" / "esc50.csv", split="test", transform=val_transform)
 
     print(f"training dataset {len(train_dataset)}")
     print(f"val dataset {len(val_dataset)}")
@@ -141,25 +157,26 @@ def train():
     for epoch in range(num_epochs):
         model.train()
         epoch_loss = 0.0
-        progess_bar = tqdm(
+        progress_bar = tqdm(
             train_dataloader, desc=f'Epoch {epoch+1}/{num_epochs}')
-        for data, target in progess_bar:
+        for data, target in progress_bar:
             data, target = data.to(device), target.to(device)
-        if np.random.random() > 0.7:
-            data, target_a, target_b, lam = mixup_data(data, target)
-            output = model(data)
-            loss = mixup_criterion(criterion, output, target_a, target_b, lam)
-        else:
-            output = model(data)
-            loss = criterion(output, target)
+            if np.random.random() > 0.7:
+                data, target_a, target_b, lam = mixup_data(data, target)
+                output = model(data)
+                loss = mixup_criterion(
+                    criterion, output, target_a, target_b, lam)
+            else:
+                output = model(data)
+                loss = criterion(output, target)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
 
-        epoch_loss += loss.item()
-        progess_bar.set_postfix({'loss': f'{loss.item():.4f}'})
+            epoch_loss += loss.item()
+            progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
 
     average_epoch_loss = epoch_loss / len(train_dataloader)
     writer.add_scalar('Loss/Train', average_epoch_loss, epoch)
@@ -175,7 +192,7 @@ def train():
         for data, target in test_dataloader:
             data, target = data.to(device), target.to(device)
             outputs = model(data)
-            loss = criterion(data)
+            loss = criterion(outputs, target)
             val_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             total += target.size(0)
@@ -186,7 +203,7 @@ def train():
     writer.add_scalar('Loss/Validation', avg_val_loss, epoch)
     writer.add_scalar('accuracy', accuracy, epoch)
 
-    print(f'Epoch {epoch + 1} loss: ${average_epoch_loss}, Val loss: {avg_val_loss:. 4f}, accuracy: {accuracy:.2f}')
+    print(f'Epoch {epoch + 1} loss: ${average_epoch_loss}, Val loss: {avg_val_loss:.4f}, accuracy: {accuracy:.2f}')
     if accuracy > best_accuracy:
         best_accuracy = accuracy
         torch.save({
@@ -195,7 +212,7 @@ def train():
             'epoch': epoch,
             'classes': train_dataset.classes
         },
-            'models/best_model.pth')
+            '/models/best_model.pth')
         print(f'New best model saved: {accuracy:.2f}')
     writer.close()
     print(f'training completed, best accuracy: {best_accuracy:.2f}')
@@ -204,3 +221,8 @@ def train():
 @app.local_entrypoint()
 def main():
     train.remote()
+
+
+@app.local_entrypoint()
+def check_accuracy():
+    check_accuracy_remote.remote()
