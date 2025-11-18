@@ -94,12 +94,12 @@ def check_accuracy_remote():
     print("Best Validation Accuracy:", checkpoint["accuracy"])
     print("Epoch:", checkpoint["epoch"])
 
-@app.function(image=image,volumes={"/models": model_volume})
+
+@app.function(image=image, volumes={"/models": model_volume})
 def debug_volume():
     import os
     print("Inside Modal container, listing /models:")
     print(os.listdir("/models"))
-
 
 
 @app.function(image=image, gpu="A10G", volumes={"/data": volume, "/models": model_volume}, timeout=60*60*3)
@@ -107,7 +107,7 @@ def train():
     esc50_dir = Path("/opt/esc50-data")
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = f'models/tensorboard_logs/run_{timestamp}'
+    log_dir = f'/models/tensorboard_logs/run_{timestamp}'
     writer = SummaryWriter(log_dir)
     train_transform = nn.Sequential(T.MelSpectrogram(
         sample_rate=22050,
@@ -226,3 +226,151 @@ def main():
 @app.local_entrypoint()
 def check_accuracy():
     check_accuracy_remote.remote()
+
+
+@app.function(image=image, volumes={"/models": model_volume})
+def predict_audio(file: bytes):
+    import torch
+    import torchaudio
+    import torch.nn as nn
+    import torchaudio.transforms as T
+    from model import AudioCNN
+    import io
+
+    # Load checkpoint from Modal volume
+    checkpoint = torch.load("/models/best_model.pth", map_location="cpu")
+    classes = checkpoint["classes"]
+
+    # Build model
+    model = AudioCNN(num_classes=len(classes))
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    # Decode audio bytes
+    waveform, sr = torchaudio.load(io.BytesIO(file))
+
+    # Convert stereo → mono
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+
+    # SAME transform used for validation
+    transform = nn.Sequential(
+        T.MelSpectrogram(
+            sample_rate=22050,
+            n_fft=1024,
+            hop_length=512,
+            n_mels=128,
+            f_min=0,
+            f_max=11025,
+        ),
+        T.AmplitudeToDB()
+    )
+
+    # Convert waveform → Mel spectrogram
+    mel = transform(waveform)          # [1, 128, T]
+    mel = mel.unsqueeze(0)             # [1, 1, 128, T]
+
+    # Predict
+    with torch.no_grad():
+        logits = model(mel)
+        probs = torch.softmax(logits, dim=1)
+        pred_idx = probs.argmax().item()
+        pred_class = classes[pred_idx]
+        confidence = probs[0][pred_idx].item()
+
+    return {
+        "prediction": pred_class,
+        "confidence": confidence
+    }
+
+
+@app.local_entrypoint()
+def test_audio(path: str):
+    # Read audio file
+    with open(path, "rb") as f:
+        content = f.read()
+
+    # Send to Modal for prediction
+    result = predict_audio.remote(content)
+
+    print("Prediction:", result["prediction"])
+    print("Confidence:", round(result["confidence"], 4))
+
+
+@app.function(
+    image=image,
+    volumes={"/models": model_volume},
+    timeout=60,
+)
+@modal.asgi_app()
+def fastapi_app():
+    from fastapi import FastAPI, UploadFile, File
+    import io
+    import torch
+    import torchaudio
+    import torch.nn as nn
+    import torchaudio.transforms as T
+    from model import AudioCNN
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app = FastAPI()
+    app.add_middleware(CORSMiddleware,
+
+                       allow_origins=["*"],
+                       allow_credentials=True,
+                       allow_methods=["*"],
+                       allow_headers=["*"],)
+
+    @app.get("/")
+    async def root():
+        return {"status": "working!", "test": True}
+
+    @app.post("/predict")
+    async def predict(audio: UploadFile = File(...)):
+        # Read uploaded audio file
+        data = await audio.read()
+
+        # Load model from volume
+        checkpoint = torch.load("/models/best_model.pth", map_location="cpu")
+        classes = checkpoint["classes"]
+
+        model = AudioCNN(num_classes=len(classes))
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.eval()
+
+        # Decode audio
+        waveform, sr = torchaudio.load(io.BytesIO(data))
+
+        # Stereo → mono
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        # Same transforms as validation
+        transform = nn.Sequential(
+            T.MelSpectrogram(
+                sample_rate=22050,
+                n_fft=1024,
+                hop_length=512,
+                n_mels=128,
+                f_min=0,
+                f_max=11025
+            ),
+            T.AmplitudeToDB()
+        )
+
+        mel = transform(waveform).unsqueeze(0)  # → [1,1,128,T]
+
+        # Prediction
+        with torch.no_grad():
+            logits = model(mel)
+            probs = torch.softmax(logits, dim=1)
+
+        idx = int(probs.argmax().item())
+        confidence = float(probs[0][idx])
+
+        return {
+            "prediction": classes[idx],
+            "confidence": confidence
+        }
+
+    return app

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Classifier</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+      }
+
+      .container {
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        padding: 40px;
+        max-width: 500px;
+        width: 100%;
+      }
+
+      h1 {
+        color: #333;
+        margin-bottom: 10px;
+        font-size: 28px;
+      }
+
+      .subtitle {
+        color: #666;
+        margin-bottom: 30px;
+        font-size: 14px;
+      }
+
+      .upload-area {
+        border: 3px dashed #667eea;
+        border-radius: 15px;
+        padding: 40px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        background: #f8f9ff;
+      }
+
+      .upload-area:hover {
+        border-color: #764ba2;
+        background: #f0f2ff;
+      }
+
+      .upload-area.dragover {
+        border-color: #764ba2;
+        background: #e8ebff;
+        transform: scale(1.02);
+      }
+
+      .upload-icon {
+        font-size: 48px;
+        margin-bottom: 15px;
+      }
+
+      .upload-text {
+        color: #667eea;
+        font-weight: 600;
+        margin-bottom: 5px;
+      }
+
+      .upload-hint {
+        color: #999;
+        font-size: 13px;
+      }
+
+      input[type="file"] {
+        display: none;
+      }
+
+      .file-info {
+        margin-top: 20px;
+        padding: 15px;
+        background: #f8f9ff;
+        border-radius: 10px;
+        display: none;
+      }
+
+      .file-info.show {
+        display: block;
+      }
+
+      .file-name {
+        color: #333;
+        font-weight: 500;
+        margin-bottom: 10px;
+      }
+
+      .btn {
+        width: 100%;
+        padding: 15px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s;
+        margin-top: 10px;
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+      }
+
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .result {
+        margin-top: 30px;
+        padding: 25px;
+        background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
+        border-radius: 15px;
+        display: none;
+      }
+
+      .result.show {
+        display: block;
+        animation: slideIn 0.5s ease;
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .result-label {
+        color: #666;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+      }
+
+      .prediction {
+        color: #667eea;
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 15px;
+        text-transform: capitalize;
+      }
+
+      .confidence {
+        color: #333;
+        font-size: 18px;
+      }
+
+      .confidence-bar {
+        height: 8px;
+        background: #e0e0e0;
+        border-radius: 10px;
+        margin-top: 10px;
+        overflow: hidden;
+      }
+
+      .confidence-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        border-radius: 10px;
+        transition: width 0.5s ease;
+      }
+
+      .spinner {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #667eea;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        margin: 20px auto;
+        display: none;
+      }
+
+      .spinner.show {
+        display: block;
+      }
+
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .error {
+        background: #ffe0e0;
+        color: #d00;
+        padding: 15px;
+        border-radius: 10px;
+        margin-top: 15px;
+        display: none;
+      }
+
+      .error.show {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🎵 Audio Classifier</h1>
+      <p class="subtitle">
+        Upload an audio file to classify environmental sounds
+      </p>
+
+      <div class="upload-area" id="uploadArea">
+        <div class="upload-icon">🎧</div>
+        <div class="upload-text">Click to upload or drag and drop</div>
+        <div class="upload-hint">WAV, MP3, OGG files supported</div>
+        <input type="file" id="fileInput" accept="audio/*" />
+      </div>
+
+      <div class="file-info" id="fileInfo">
+        <div class="file-name" id="fileName"></div>
+        <button class="btn" id="classifyBtn">Classify Audio</button>
+      </div>
+
+      <div class="spinner" id="spinner"></div>
+
+      <div class="error" id="error"></div>
+
+      <div class="result" id="result">
+        <div class="result-label">Prediction</div>
+        <div class="prediction" id="prediction"></div>
+        <div class="result-label">Confidence</div>
+        <div class="confidence" id="confidence"></div>
+        <div class="confidence-bar">
+          <div class="confidence-fill" id="confidenceFill"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // REPLACE WITH YOUR MODAL ENDPOINT URL (add /predict at the end!)
+      const API_URL = "https://anisssh--audio-cnn-fastapi-app.modal.run/predict";
+
+      const uploadArea = document.getElementById("uploadArea");
+      const fileInput = document.getElementById("fileInput");
+      const fileInfo = document.getElementById("fileInfo");
+      const fileName = document.getElementById("fileName");
+      const classifyBtn = document.getElementById("classifyBtn");
+      const spinner = document.getElementById("spinner");
+      const result = document.getElementById("result");
+      const error = document.getElementById("error");
+      const prediction = document.getElementById("prediction");
+      const confidence = document.getElementById("confidence");
+      const confidenceFill = document.getElementById("confidenceFill");
+
+      let selectedFile = null;
+
+      // Click to upload
+      uploadArea.addEventListener("click", () => fileInput.click());
+
+      // Drag and drop
+      uploadArea.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        uploadArea.classList.add("dragover");
+      });
+
+      uploadArea.addEventListener("dragleave", () => {
+        uploadArea.classList.remove("dragover");
+      });
+
+      uploadArea.addEventListener("drop", (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove("dragover");
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          handleFile(files[0]);
+        }
+      });
+
+      // File selected
+      fileInput.addEventListener("change", (e) => {
+        if (e.target.files.length > 0) {
+          handleFile(e.target.files[0]);
+        }
+      });
+
+      function handleFile(file) {
+        selectedFile = file;
+        fileName.textContent = `📄 ${file.name}`;
+        fileInfo.classList.add("show");
+        result.classList.remove("show");
+        error.classList.remove("show");
+      }
+
+      // Classify button
+      classifyBtn.addEventListener("click", async () => {
+        if (!selectedFile) return;
+
+        classifyBtn.disabled = true;
+        spinner.classList.add("show");
+        result.classList.remove("show");
+        error.classList.remove("show");
+
+        try {
+          const formData = new FormData();
+          formData.append("audio", selectedFile);
+
+          const response = await fetch(API_URL, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error(`API error: ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          // Display results
+          prediction.textContent = data.prediction;
+          confidence.textContent = `${(data.confidence * 100).toFixed(1)}%`;
+          confidenceFill.style.width = `${data.confidence * 100}%`;
+          result.classList.add("show");
+        } catch (err) {
+          error.textContent = `Error: ${err.message}. Make sure to replace API_URL with your Modal endpoint!`;
+          error.classList.add("show");
+        } finally {
+          classifyBtn.disabled = false;
+          spinner.classList.remove("show");
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -3,3 +3,7 @@ torch
 torchaudio
 tqdm
 numpy
+tensorboard
+torchcodec
+fastapi
+python-multipart
